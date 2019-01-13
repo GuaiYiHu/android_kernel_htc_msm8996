@@ -24,6 +24,7 @@
 #include "adreno_ringbuffer.h"
 #include "adreno_trace.h"
 #include "kgsl_sharedmem.h"
+#include "kgsl_htc.h"
 
 #define CMDQUEUE_NEXT(_i, _s) (((_i) + 1) % (_s))
 
@@ -1782,8 +1783,10 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 	int ret, i;
 	int fault;
 	int halt;
+	int keepfault, fault_pid = 0;
 
 	fault = atomic_xchg(&dispatcher->fault, 0);
+	keepfault = fault;
 	if (fault == 0)
 		return 0;
 
@@ -1869,6 +1872,7 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 
 	if (dispatch_q && !adreno_cmdqueue_is_empty(dispatch_q)) {
 		cmdbatch = dispatch_q->cmd_q[dispatch_q->head];
+		fault_pid = cmdbatch->context->proc_priv->pid;
 		trace_adreno_cmdbatch_fault(cmdbatch, fault);
 	}
 
@@ -1925,6 +1929,8 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 	}
 
 	atomic_add(halt, &adreno_dev->halt);
+
+	adreno_fault_panic(device, fault_pid, keepfault);
 
 	return 1;
 }

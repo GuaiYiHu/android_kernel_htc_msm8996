@@ -55,6 +55,10 @@ extern void all_vm_events(unsigned long *);
 
 extern void vm_events_fold_cpu(int cpu);
 
+extern void dump_vm_events_counter(void);
+
+extern void vm_event_report_meminfo(struct seq_file *m);
+
 #else
 
 /* Disable counters */
@@ -74,6 +78,14 @@ static inline void all_vm_events(unsigned long *ret)
 {
 }
 static inline void vm_events_fold_cpu(int cpu)
+{
+}
+
+static inline void dump_vm_events_counter(void)
+{
+}
+
+static void vm_event_report_meminfo(struct seq_file *m)
 {
 }
 

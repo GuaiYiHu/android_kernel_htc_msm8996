@@ -96,6 +96,7 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/sched.h>
 
+
 const char *task_event_names[] = {"PUT_PREV_TASK", "PICK_NEXT_TASK",
 				  "TASK_WAKE", "TASK_MIGRATE", "TASK_UPDATE",
 				"IRQ_UPDATE"};
@@ -664,18 +665,24 @@ void resched_cpu(int cpu)
  * selecting an idle cpu will add more delays to the timers than intended
  * (as that cpu's timer base may not be uptodate wrt jiffies etc).
  */
+
+extern int over_schedule_budget(int cpu);
 int get_nohz_timer_target(int pinned)
 {
 	int cpu = smp_processor_id();
 	int i;
 	struct sched_domain *sd;
 
-	if (pinned || !get_sysctl_timer_migration() || !idle_cpu(cpu))
+	if (pinned || !get_sysctl_timer_migration() || (!over_schedule_budget(cpu) && !idle_cpu(cpu)))
 		return cpu;
 
 	rcu_read_lock();
 	for_each_domain(cpu, sd) {
+
 		for_each_cpu(i, sched_domain_span(sd)) {
+			if (over_schedule_budget(i))
+				continue;
+
 			if (!idle_cpu(i)) {
 				cpu = i;
 				goto unlock;
@@ -1852,6 +1859,7 @@ static int __init set_sched_ravg_window(char *str)
 
 early_param("sched_ravg_window", set_sched_ravg_window);
 
+extern u64 arch_counter_get_cntpct(void);
 static inline void
 update_window_start(struct rq *rq, u64 wallclock)
 {
@@ -1859,7 +1867,13 @@ update_window_start(struct rq *rq, u64 wallclock)
 	int nr_windows;
 
 	delta = wallclock - rq->window_start;
-	BUG_ON(delta < 0);
+	/* If the MPM global timer is cleared, set delta as 0 to avoid kernel BUG happening */
+	if (delta < 0) {
+		if (arch_counter_get_cntpct() == 0)
+			delta = 0;
+		else
+			BUG_ON(1);
+	}
 	if (delta < sched_ravg_window)
 		return;
 
@@ -1909,7 +1923,7 @@ nearly_same_freq(unsigned int cur_freq, unsigned int freq_required)
 }
 
 /* Convert busy time to frequency equivalent */
-static inline unsigned int load_to_freq(struct rq *rq, u64 load)
+unsigned int load_to_freq(struct rq *rq, u64 load)
 {
 	unsigned int freq;
 
@@ -1922,6 +1936,7 @@ static inline unsigned int load_to_freq(struct rq *rq, u64 load)
 
 	return freq;
 }
+EXPORT_SYMBOL(load_to_freq);
 
 /*
  * Return load from all related group in given cpu.
@@ -2587,6 +2602,54 @@ static void update_cpu_busy_time(struct task_struct *p, struct rq *rq,
 	BUG();
 }
 
+static inline void update_cpu_load(struct rq *rq, u64 wallclock)
+{
+	int nr_full_windows;
+	int i;
+	u64 sum = 0, avg, elapsetime;
+	u64 load = rq->prev_runnable_sum;
+	struct rq * rqi;
+
+	if (wallclock - rq->load_last_update_timestamp < sched_ravg_window)
+		return;
+
+	load =  scale_load_to_cpu(load, cpu_of(rq));
+
+	if (load > sched_ravg_window)
+		load = sched_ravg_window;
+
+	nr_full_windows = div64_u64((rq->window_start - rq->load_last_update_timestamp),
+						sched_ravg_window);
+
+	for (i = 0; i < nr_full_windows + 1 && i < SCHED_LOAD_WINDOW_SIZE; i++) {
+		rq->load_history[rq->load_history_index] = load;
+		if (++rq->load_history_index == SCHED_LOAD_WINDOW_SIZE)
+			rq->load_history_index = 0;
+	}
+
+	for (i = 0; i < SCHED_LOAD_WINDOW_SIZE; i++) {
+		sum += rq->load_history[i];
+	}
+
+	avg = div64_u64(sum, SCHED_LOAD_WINDOW_SIZE);
+
+	rq->load_avg = real_to_pct(avg);
+	rq->load_last_update_timestamp = wallclock;
+
+	elapsetime = SCHED_LOAD_WINDOW_SIZE * sched_ravg_window;
+
+	for (i = 0; i < NR_CPUS; i++) {
+		if (i == cpu_of(rq))
+			continue;
+		rqi = cpu_rq(i);
+		if (wallclock - rqi->load_last_update_timestamp > elapsetime) {
+			rqi->load_last_update_timestamp = wallclock;
+			memset(rqi->load_history, 0, sizeof(rqi->load_history));
+			rqi->load_avg = 0;
+		}
+	}
+}
+
 static inline u32 predict_and_update_buckets(struct rq *rq,
 			struct task_struct *p, u32 runtime) {
 
@@ -2678,7 +2741,7 @@ int sched_update_freq_max_load(const cpumask_t *cpumask)
 
 		i = 0;
 		costs = per_cpu_info[cpu].ptable;
-		while (costs[i].freq) {
+		while (i<per_cpu_info[cpu].len && costs[i].freq) {
 			entry = &max_load->freqs[i];
 			freq = costs[i].freq;
 			hpct = get_freq_max_load(cpu, freq);
@@ -2985,6 +3048,7 @@ update_task_ravg(struct task_struct *p, struct rq *rq, int event,
 	update_task_rq_cpu_cycles(p, rq, event, wallclock, irqtime);
 	update_task_demand(p, rq, event, wallclock);
 	update_cpu_busy_time(p, rq, event, wallclock, irqtime);
+	update_cpu_load(rq, wallclock);
 	update_task_pred_demand(rq, p, event);
 done:
 	trace_sched_update_task_ravg(p, rq, event, wallclock, irqtime,
@@ -3096,6 +3160,11 @@ static inline void set_window_start(struct rq *rq)
 		rq->curr_runnable_sum = rq->prev_runnable_sum = 0;
 		rq->nt_curr_runnable_sum = rq->nt_prev_runnable_sum = 0;
 #endif
+		memset(rq->load_history, 0, sizeof(rq->load_history));
+		rq->load_avg = 0;
+		rq->load_history_index = 0;
+		rq->load_last_update_timestamp = 0;
+
 		raw_spin_unlock(&sync_rq->lock);
 	}
 
@@ -3233,6 +3302,13 @@ void reset_all_window_stats(u64 window_start, unsigned int window_size)
 		rq->curr_runnable_sum = rq->prev_runnable_sum = 0;
 		rq->nt_curr_runnable_sum = rq->nt_prev_runnable_sum = 0;
 #endif
+
+		memset(rq->load_history, 0, sizeof(rq->load_history));
+		rq->load_avg = 0;
+		rq->load_history_index = 0;
+		rq->load_last_update_timestamp = 0;
+
+
 		reset_cpu_hmp_stats(cpu, 1);
 	}
 
@@ -6144,6 +6220,11 @@ NOKPROBE_SYMBOL(preempt_count_sub);
  */
 static noinline void __schedule_bug(struct task_struct *prev)
 {
+#ifdef CONFIG_DEBUG_PREEMPT
+	/* Save this before calling printk(), since that will clobber it */
+	unsigned long preempt_disable_ip = get_preempt_disable_ip(current);
+#endif
+
 	if (oops_in_progress)
 		return;
 
@@ -6157,7 +6238,7 @@ static noinline void __schedule_bug(struct task_struct *prev)
 #ifdef CONFIG_DEBUG_PREEMPT
 	if (in_atomic_preempt_off()) {
 		pr_err("Preemption disabled at:");
-		print_ip_sym(current->preempt_disable_ip);
+		print_ip_sym(preempt_disable_ip);
 		pr_cont("\n");
 	}
 #endif
@@ -8052,6 +8133,7 @@ void sched_show_task(struct task_struct *p)
 	unsigned long free = 0;
 	int ppid;
 	unsigned state;
+	struct task_struct *group_leader;
 
 	state = p->state ? __ffs(p->state) + 1 : 0;
 	printk(KERN_INFO "%-15.15s %c", p->comm,
@@ -8073,15 +8155,43 @@ void sched_show_task(struct task_struct *p)
 	rcu_read_lock();
 	ppid = task_pid_nr(rcu_dereference(p->real_parent));
 	rcu_read_unlock();
-	printk(KERN_CONT "%5lu %5d %6d 0x%08lx\n", free,
+	printk(KERN_CONT "%5lu %5d %6d 0x%08lx c%d %llu\n", free,
 		task_pid_nr(p), ppid,
-		(unsigned long)task_thread_info(p)->flags);
+		(unsigned long)task_thread_info(p)->flags, p->on_cpu,
+#if defined(CONFIG_SCHEDSTATS) || defined(CONFIG_TASK_DELAY_ACCT)
+		div64_u64(task_rq(p)->clock - p->sched_info.last_arrival, NSEC_PER_MSEC));
+#else
+		(unsigned long long)0);
+#endif
+
+	group_leader = p->group_leader;
+	printk(KERN_CONT "  tgid: %d, group leader: %s\n",
+			p->tgid, group_leader ? group_leader->comm : "unknown");
+
+#if defined(CONFIG_DEBUG_MUTEXES)
+	if (state == TASK_UNINTERRUPTIBLE) {
+		struct task_struct* blocker = p->blocked_by;
+		if (blocker) {
+			/* The content of 'blocker' here might be invalid if
+			 * the previous locker exits imediately after unlock.
+			 */
+			printk(KERN_CONT " blocked by %.32s (%d:%d) for %u ms\n",
+				blocker->comm, blocker->tgid, blocker->pid,
+				jiffies_to_msecs(jiffies - p->blocked_since));
+		}
+	}
+#endif
 
 	print_worker_info(KERN_INFO, p);
 	show_stack(p, NULL);
 }
 
 void show_state_filter(unsigned long state_filter)
+{
+	show_thread_group_state_filter(NULL, state_filter);
+}
+
+void show_thread_group_state_filter(const char *tg_comm, unsigned long state_filter)
 {
 	struct task_struct *g, *p;
 
@@ -8099,14 +8209,17 @@ void show_state_filter(unsigned long state_filter)
 		 * console might take a lot of time:
 		 */
 		touch_nmi_watchdog();
-		if (!state_filter || (p->state & state_filter))
-			sched_show_task(p);
+		if (!tg_comm || (tg_comm && !strncmp(tg_comm, g->comm, TASK_COMM_LEN))) {
+			if (!state_filter || (p->state & state_filter))
+				sched_show_task(p);
+		}
 	}
 
 	touch_all_softlockup_watchdogs();
 
 #ifdef CONFIG_SYSRQ_SCHED_DEBUG
-	sysrq_sched_debug_show();
+	if (!tg_comm)
+		sysrq_sched_debug_show();
 #endif
 	rcu_read_unlock();
 	/*
@@ -10730,6 +10843,12 @@ void __init sched_init(void)
 		rq->hmp_stats.pred_demands_sum = 0;
 #endif
 #endif
+		memset(rq->load_history, 0, sizeof(rq->load_history));
+		rq->load_avg = 0;
+		rq->budget = 100;
+		rq->load_history_index = 0;
+		rq->load_last_update_timestamp = 0;
+
 		rq->max_idle_balance_cost = sysctl_sched_migration_cost;
 		rq->cstate = 0;
 		rq->wakeup_latency = 0;
@@ -10809,6 +10928,9 @@ early_initcall(__might_sleep_init);
 void __might_sleep(const char *file, int line, int preempt_offset)
 {
 	static unsigned long prev_jiffy;	/* ratelimiting */
+#ifdef CONFIG_DEBUG_PREEMPT
+	unsigned long preempt_disable_ip;
+#endif
 
 	rcu_sleep_check(); /* WARN_ON_ONCE() by default, no rate limit reqd. */
 	if ((preempt_count_equals(preempt_offset) && !irqs_disabled() &&
@@ -10820,6 +10942,11 @@ void __might_sleep(const char *file, int line, int preempt_offset)
 	if (time_before(jiffies, prev_jiffy + HZ) && prev_jiffy)
 		return;
 	prev_jiffy = jiffies;
+
+#ifdef CONFIG_DEBUG_PREEMPT
+	/* Save this before calling printk(), since that will clobber it */
+	preempt_disable_ip = get_preempt_disable_ip(current);
+#endif
 
 	printk(KERN_ERR
 		"BUG: sleeping function called from invalid context at %s:%d\n",
@@ -10835,7 +10962,7 @@ void __might_sleep(const char *file, int line, int preempt_offset)
 #ifdef CONFIG_DEBUG_PREEMPT
 	if (!preempt_count_equals(preempt_offset)) {
 		pr_err("Preemption disabled at:");
-		print_ip_sym(current->preempt_disable_ip);
+		print_ip_sym(preempt_disable_ip);
 		pr_cont("\n");
 	}
 #endif

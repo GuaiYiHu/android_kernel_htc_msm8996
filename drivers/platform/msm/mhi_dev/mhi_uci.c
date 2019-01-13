@@ -207,6 +207,12 @@ struct uci_ctrl {
 	atomic_t		ctrl_data_update;
 };
 
+struct uci_ctrl {
+	wait_queue_head_t	ctrl_wq;
+	struct mhi_uci_ctxt_t	*uci_ctxt;
+	atomic_t		ctrl_data_update;
+};
+
 struct uci_client {
 	u32 client_index;
 	/* write channel - always odd*/
@@ -459,6 +465,30 @@ static int mhi_uci_send_packet(struct mhi_dev_client **client_handle,
 error_memcpy:
 	kfree(data_loc);
 	return -EFAULT;
+}
+
+static unsigned int mhi_uci_ctrl_poll(struct file *file, poll_table *wait)
+{
+	unsigned int mask = 0;
+	struct uci_ctrl *uci_ctrl_handle;
+
+	uci_ctrl_handle = file->private_data;
+
+	if (!uci_ctrl_handle)
+		return -ENODEV;
+
+	poll_wait(file, &uci_ctrl_handle->ctrl_wq, wait);
+	if (!atomic_read(&uci_ctxt.mhi_disabled) &&
+		atomic_read(&uci_ctrl_handle->ctrl_data_update)) {
+		uci_log(UCI_DBG_VERBOSE, "Client can read ctrl_state");
+		mask |= POLLIN | POLLRDNORM;
+	}
+
+	uci_log(UCI_DBG_VERBOSE,
+		"Client attempted to poll ctrl returning mask 0x%x\n",
+		mask);
+
+	return mask;
 }
 
 static unsigned int mhi_uci_ctrl_poll(struct file *file, poll_table *wait)
@@ -1298,6 +1328,31 @@ int mhi_uci_init(void)
 			goto failed_char_add;
 		}
 
+		if (uci_ctxt.chan_attrib[i*2].uci_ownership) {
+			cdev_init(&uci_ctxt.cdev[i], &mhi_uci_client_fops);
+			uci_ctxt.cdev[i].owner = THIS_MODULE;
+			r = cdev_add(&uci_ctxt.cdev[i],
+					uci_ctxt.start_ctrl_nr + i , 1);
+			if (IS_ERR_VALUE(r)) {
+				uci_log(UCI_DBG_ERROR,
+					"Failed to add cdev %d, ret 0x%x\n",
+					i, r);
+				goto failed_char_add;
+			}
+
+			uci_ctxt.client_handles[i].dev =
+				device_create(uci_ctxt.mhi_uci_class, NULL,
+						uci_ctxt.start_ctrl_nr + i,
+						NULL, DEVICE_NAME "_pipe_%d",
+						i * 2);
+			if (IS_ERR(uci_ctxt.client_handles[i].dev)) {
+				uci_log(UCI_DBG_ERROR,
+						"Failed to add cdev %d\n", i);
+				cdev_del(&uci_ctxt.cdev[i]);
+				goto failed_device_create;
+			}
+		}
+
 		uci_ctxt.client_handles[i].dev =
 			device_create(uci_ctxt.mhi_uci_class, NULL,
 					uci_ctxt.start_ctrl_nr + i,
@@ -1309,6 +1364,16 @@ int mhi_uci_init(void)
 			cdev_del(&uci_ctxt.cdev[i]);
 			goto failed_device_create;
 		}
+	}
+
+	/* Control node */
+	cdev_init(&uci_ctxt.cdev_ctrl, &mhi_uci_ctrl_client_fops);
+	uci_ctxt.cdev_ctrl.owner = THIS_MODULE;
+	r = cdev_add(&uci_ctxt.cdev_ctrl, uci_ctxt.ctrl_nr , 1);
+	if (IS_ERR_VALUE(r)) {
+		uci_log(UCI_DBG_ERROR,
+		"Failed to add ctrl cdev %d, ret 0x%x\n", i, r);
+		goto failed_char_add;
 	}
 
 	/* Control node */

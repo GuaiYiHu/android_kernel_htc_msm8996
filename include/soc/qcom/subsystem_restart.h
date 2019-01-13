@@ -26,6 +26,13 @@ enum {
 	RESET_LEVEL_MAX
 };
 
+#if defined(CONFIG_HTC_FEATURES_SSR)
+enum {
+        DISABLE_RAMDUMP = 0,
+        ENABLE_RAMDUMP,
+};
+#endif
+
 struct device;
 struct module;
 
@@ -76,8 +83,9 @@ struct subsys_desc {
 	unsigned int err_ready_irq;
 	unsigned int stop_ack_irq;
 	unsigned int wdog_bite_irq;
+        int apps_reboot_gpio;
 	unsigned int generic_irq;
-	int force_stop_gpio;
+        int force_stop_gpio;
 	int ramdump_disable_gpio;
 	int shutdown_ack_gpio;
 	int ramdump_disable;
@@ -89,6 +97,10 @@ struct subsys_desc {
 	bool system_debug;
 	bool ignore_ssr_failure;
 	const char *edge;
+#if 1 //Modem_BSP++
+       irqreturn_t (*reboot_req_handler) (int irq, void *dev_id);
+       unsigned int reboot_req_irq;
+#endif //Modem_BSP--
 };
 
 /**
@@ -108,7 +120,36 @@ struct notif_data {
 	struct platform_device *pdev;
 };
 
+extern void htc_smp2p_notify_modem_app_reboot( bool enable );
+extern bool htc_check_modem_crash_status ( void );
+
 #if defined(CONFIG_MSM_SUBSYSTEM_RESTART)
+
+#if defined(CONFIG_HTC_DEBUG_SSR)
+void subsys_set_restart_reason(struct subsys_device *dev, const char *reason);
+#endif /* CONFIG_HTC_DEBUG_SSR  */
+
+#if defined(CONFIG_HTC_FEATURES_SSR)
+extern void subsys_set_enable_ramdump(struct subsys_device *dev, int enable);
+extern void subsys_set_restart_level(struct subsys_device *dev, int level);
+extern void subsys_config_modem_enable_ramdump(struct subsys_device *dev);
+extern void subsys_config_modem_restart_level(struct subsys_device *dev);
+#endif
+
+#if defined(CONFIG_HTC_FEATURES_SSR)
+void subsys_config_enable_ramdump(struct subsys_device *dev);
+void subsys_config_restart_level(struct subsys_device *dev);
+#else
+static inline void subsys_config_enable_ramdump(struct subsys_device *dev)
+{
+	return;
+}
+
+static inline void subsys_config_restart_level(struct subsys_device *dev)
+{
+	return;
+}
+#endif
 
 extern int subsys_get_restart_level(struct subsys_device *dev);
 extern int subsystem_restart_dev(struct subsys_device *dev);
@@ -131,6 +172,13 @@ void notify_proxy_unvote(struct device *device);
 void complete_err_ready(struct subsys_device *subsys);
 extern int wait_for_shutdown_ack(struct subsys_desc *desc);
 #else
+
+#if defined(CONFIG_HTC_DEBUG_SSR)
+static inline void subsys_set_restart_reason(struct subsys_device *dev, const char *reason)
+{
+	return;
+}
+#endif /* CONFIG_HTC_DEBUG_SSR */
 
 static inline int subsys_get_restart_level(struct subsys_device *dev)
 {

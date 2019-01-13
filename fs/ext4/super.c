@@ -795,8 +795,10 @@ static void ext4_put_super(struct super_block *sb)
 	if (sbi->s_journal) {
 		err = jbd2_journal_destroy(sbi->s_journal);
 		sbi->s_journal = NULL;
-		if (err < 0)
+		if (err < 0){
+ 			clear_opt(sb,ERRORS_PANIC);
 			ext4_abort(sb, "Couldn't clean up the journal");
+		}
 	}
 
 	ext4_es_unregister_shrinker(sbi);
@@ -827,7 +829,6 @@ static void ext4_put_super(struct super_block *sb)
 	percpu_counter_destroy(&sbi->s_freeinodes_counter);
 	percpu_counter_destroy(&sbi->s_dirs_counter);
 	percpu_counter_destroy(&sbi->s_dirtyclusters_counter);
-	brelse(sbi->s_sbh);
 #ifdef CONFIG_QUOTA
 	for (i = 0; i < EXT4_MAXQUOTAS; i++)
 		kfree(sbi->s_qf_names[i]);
@@ -859,6 +860,7 @@ static void ext4_put_super(struct super_block *sb)
 	}
 	if (sbi->s_mmp_tsk)
 		kthread_stop(sbi->s_mmp_tsk);
+	brelse(sbi->s_sbh);
 	sb->s_fs_info = NULL;
 	/*
 	 * Now that we are completely done shutting down the
@@ -1891,11 +1893,14 @@ static int ext4_setup_super(struct super_block *sb, struct ext4_super_block *es,
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	int res = 0;
 
+#if 0
+	/* [FIXME] Skip to check revision and force recover it */
 	if (le32_to_cpu(es->s_rev_level) > EXT4_MAX_SUPP_REV) {
 		ext4_msg(sb, KERN_ERR, "revision level too high, "
 			 "forcing read-only mode");
 		res = MS_RDONLY;
 	}
+#endif
 	if (read_only)
 		goto done;
 	if (!(sbi->s_mount_state & EXT4_VALID_FS))
@@ -4654,6 +4659,18 @@ static int ext4_commit_super(struct super_block *sb, int sync)
 	struct ext4_super_block *es = EXT4_SB(sb)->s_es;
 	struct buffer_head *sbh = EXT4_SB(sb)->s_sbh;
 	int error = 0;
+
+	/* [FIXME] Force recover revision level and creator os */
+	if (cpu_to_le32(es->s_creator_os) != EXT4_OS_LINUX) {
+		ext4_msg(sb, KERN_ERR, "s_creator_os uncorrect: 0x%08x, try to recover"
+			, cpu_to_le32(es->s_creator_os));
+		es->s_creator_os = cpu_to_le32(EXT4_OS_LINUX);
+	}
+	if (cpu_to_le32(es->s_rev_level) != EXT4_DYNAMIC_REV) {
+		ext4_msg(sb, KERN_ERR, "s_rev_level uncorrect: 0x%08x, try to recover"
+			, cpu_to_le32(es->s_rev_level));
+		es->s_rev_level = cpu_to_le32(EXT4_DYNAMIC_REV);
+	}
 
 	if (!sbh || block_device_ejected(sb))
 		return error;

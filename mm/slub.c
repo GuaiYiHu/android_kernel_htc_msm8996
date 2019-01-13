@@ -468,7 +468,11 @@ static inline void *restore_red_left(struct kmem_cache *s, void *p)
  * Debug settings:
  */
 #if defined(CONFIG_SLUB_DEBUG_ON)
+#ifdef CONFIG_SLUB_LIGHT_WEIGHT_DEBUG_ON
+static int slub_debug = (SLAB_DEBUG_FREE);
+#else
 static int slub_debug = DEBUG_DEFAULT_FLAGS;
+#endif
 #elif defined(CONFIG_KASAN)
 static int slub_debug = SLAB_STORE_USER;
 #else

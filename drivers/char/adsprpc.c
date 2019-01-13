@@ -2554,6 +2554,15 @@ static int fastrpc_probe(struct platform_device *pdev)
 		}
 		if (range.addr) {
 			int srcVM[1] = {VMID_HLOS};
+#if 1 /* Modem_BSP HTC WA for 8996 modem MPU limitation */
+			int destVM[3] = {VMID_HLOS, VMID_SSC_Q6, VMID_ADSP_Q6};
+			int destVMperm[3] = {PERM_READ | PERM_WRITE | PERM_EXEC,
+					PERM_READ | PERM_WRITE | PERM_EXEC,
+					PERM_READ | PERM_WRITE | PERM_EXEC,
+					};
+			VERIFY(err, !hyp_assign_phys(range.addr, range.size,
+					srcVM, 1, destVM, destVMperm, 3));
+#else
 			int destVM[4] = {VMID_HLOS, VMID_MSS_MSA, VMID_SSC_Q6,
 					VMID_ADSP_Q6};
 			int destVMperm[4] = {PERM_READ | PERM_WRITE | PERM_EXEC,
@@ -2563,6 +2572,7 @@ static int fastrpc_probe(struct platform_device *pdev)
 					};
 			VERIFY(err, !hyp_assign_phys(range.addr, range.size,
 					srcVM, 1, destVM, destVMperm, 4));
+#endif /* Modem_BSP */
 			if (err)
 				goto bail;
 		}

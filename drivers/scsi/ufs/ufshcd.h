@@ -881,6 +881,7 @@ struct ufs_hba {
 
 	enum bkops_status urgent_bkops_lvl;
 	bool is_urgent_bkops_lvl_checked;
+	unsigned int bkops_level;
 
 	struct rw_semaphore clk_scaling_lock;
 

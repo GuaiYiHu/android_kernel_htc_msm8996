@@ -604,6 +604,7 @@ int pil_mss_reset_load_mba(struct pil_desc *pil)
 		 ret = -EINVAL;
 		 goto err_mba_data;
 	}
+
 	/* Ensure memcpy of the MBA memory is done before loading the DP */
 	wmb();
 
@@ -681,11 +682,11 @@ static int pil_msa_auth_modem_mdt(struct pil_desc *pil, const u8 *metadata,
 
 	if (pil->subsys_vmid > 0) {
 		/**
-		  * In case of modem ssr, we need to assign memory back to linux.
-		  * This is not true after cold boot since linux already owns
-		  * it. Also for secure boot devices, modem memory has to be
-		  * released after MBA is booted
-		  */
+		 * In case of modem ssr, we need to assign memory back to linux.
+		 * This is not true after cold boot since linux already owns
+		 * it. Also for secure boot devices, modem memory has to be
+		 * released after MBA is booted
+		 */
 		if (pil->modem_ssr) {
 			ret = pil_assign_mem_to_linux(pil, phy_addr, phy_sz);
 			if (ret)
@@ -755,7 +756,7 @@ static int pil_msa_mss_reset_mba_load_auth_mdt(struct pil_desc *pil,
 		return ret;
 
 	return pil_msa_auth_modem_mdt(pil, metadata, size,
-			modem_reg, sz_modem_reg);
+			 modem_reg, sz_modem_reg);
 }
 
 static int pil_msa_mba_verify_blob(struct pil_desc *pil, phys_addr_t phy_addr,

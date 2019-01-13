@@ -1856,6 +1856,13 @@ static ssize_t fwu_sysfs_image_name_store(struct device *dev,
 {
 	ssize_t retval;
 
+	if (!buf || count > MAX_IMAGE_NAME_LEN) {
+		dev_err(fwu->rmi4_data->pdev->dev.parent,
+				"%s: Failed to copy image file name\n",
+				__func__);
+		return -EINVAL;
+	}
+
 	if (!mutex_trylock(&dsx_fwu_sysfs_mutex))
 		return -EBUSY;
 	retval = sscanf(buf, "%49s", fwu->image_name);

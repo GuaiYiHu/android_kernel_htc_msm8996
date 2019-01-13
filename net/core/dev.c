@@ -4292,7 +4292,7 @@ static void napi_reuse_skb(struct napi_struct *napi, struct sk_buff *skb)
 	skb->encapsulation = 0;
 	skb_shinfo(skb)->gso_type = 0;
 	skb->truesize = SKB_TRUESIZE(skb_end_offset(skb));
-
+    BUG_ON(skb->truesize == 0x6B6B6B6A);
 	napi->skb = skb;
 }
 

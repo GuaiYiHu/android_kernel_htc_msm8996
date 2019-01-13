@@ -3220,21 +3220,21 @@ static int mdss_mdp_parse_dt_pipe(struct platform_device *pdev)
 			&mdata->rgb_pipes, mdata->nrgb_pipes,
 			mdata->nvig_pipes);
 	if (IS_ERR_VALUE(rc))
-		goto parse_fail;
+		goto rgb_alloc_fail;
 	mdata->nrgb_pipes = rc;
 
 	rc = mdss_mdp_parse_dt_pipe_helper(pdev, MDSS_MDP_PIPE_TYPE_DMA, "dma",
 			&mdata->dma_pipes, mdata->ndma_pipes,
 			mdata->nvig_pipes + mdata->nrgb_pipes);
 	if (IS_ERR_VALUE(rc))
-		goto parse_fail;
+		goto dma_alloc_fail;
 	mdata->ndma_pipes = rc;
 
 	rc = mdss_mdp_parse_dt_pipe_helper(pdev, MDSS_MDP_PIPE_TYPE_CURSOR,
 			"cursor", &mdata->cursor_pipes, mdata->ncursor_pipes,
 			0);
 	if (IS_ERR_VALUE(rc))
-		goto parse_fail;
+		goto cursor_alloc_fail;
 	mdata->ncursor_pipes = rc;
 
 	rc = 0;
@@ -3287,6 +3287,14 @@ static int mdss_mdp_parse_dt_pipe(struct platform_device *pdev)
 			data[0], data[1], data[2], data[3]);
 	}
 
+	return rc;
+
+cursor_alloc_fail:
+	devm_kfree(&pdev->dev, mdata->dma_pipes);
+dma_alloc_fail:
+	devm_kfree(&pdev->dev, mdata->rgb_pipes);
+rgb_alloc_fail:
+	devm_kfree(&pdev->dev, mdata->vig_pipes);
 parse_fail:
 	return rc;
 }
