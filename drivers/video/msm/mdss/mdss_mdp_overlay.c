@@ -1836,6 +1836,8 @@ int mdss_mode_switch(struct msm_fb_data_type *mfd, u32 mode)
 		mdss_mdp_update_panel_info(mfd, 1, 0);
 		mdss_mdp_switch_to_cmd_mode(ctl, 0);
 		mdss_mdp_ctl_stop(ctl, MDSS_PANEL_POWER_OFF);
+		writel_relaxed(0xffffffff, ctl->mdata->mdp_base + MDSS_REG_HW_INTR2_CLEAR);
+		wmb();
 	} else if (mode == MIPI_VIDEO_PANEL) {
 		if (ctl->ops.wait_pingpong)
 			rc = ctl->ops.wait_pingpong(ctl, NULL);
@@ -1881,6 +1883,8 @@ int mdss_mode_switch_post(struct msm_fb_data_type *mfd, u32 mode)
 			MDSS_EVENT_DSI_DYNAMIC_SWITCH,
 			(void *) MIPI_VIDEO_PANEL, CTL_INTF_EVENT_FLAG_DEFAULT);
 		pr_debug("%s, end\n", __func__);
+		writel_relaxed(0xffffffff, ctl->mdata->mdp_base + MDSS_REG_HW_INTR2_CLEAR);
+		wmb();
 	} else if (mode == MIPI_CMD_PANEL) {
 		/*
 		 * Needed to balance out clk refcount when going
@@ -1916,13 +1920,18 @@ static void __validate_and_set_roi(struct msm_fb_data_type *mfd,
 	struct mdss_rect l_roi = {0}, r_roi = {0};
 	struct mdp_rect tmp_roi = {0};
 	bool skip_partial_update = true;
+	bool need_rewrite_roi = false;
 
-	if (!commit)
+	if (!commit) {
+		need_rewrite_roi = true;
 		goto set_roi;
+	}
 
 	if (!memcmp(&commit->l_roi, &tmp_roi, sizeof(tmp_roi)) &&
-	    !memcmp(&commit->r_roi, &tmp_roi, sizeof(tmp_roi)))
+	    !memcmp(&commit->r_roi, &tmp_roi, sizeof(tmp_roi))) {
+		need_rewrite_roi = true;
 		goto set_roi;
+	}
 
 	rect_copy_mdp_to_mdss(&commit->l_roi, &l_roi);
 	rect_copy_mdp_to_mdss(&commit->r_roi, &r_roi);
@@ -1983,6 +1992,25 @@ static void __validate_and_set_roi(struct msm_fb_data_type *mfd,
 	}
 
 set_roi:
+	if (mfd->panel_info->aod.supported && need_rewrite_roi) {
+		struct aod_panel_info *aod = &mfd->panel_info->aod;
+		pr_info("AOD power_state=%d, next_state=%d\n",
+			mfd->panel_info->aod.power_state, mfd->panel_info->aod.next_state);
+
+		if ((aod->power_state == FB_AOD_PARTIAL_ON && !commit) || aod->next_state == FB_AOD_PARTIAL_ON) {
+			l_roi = (struct mdss_rect){0, aod->height,
+					ctl->mixer_left->width,
+					ctl->mixer_left->height - aod->height};
+			if (ctl->mixer_right) {
+				r_roi = (struct mdss_rect) {0, aod->height,
+						ctl->mixer_right->width,
+						ctl->mixer_right->height - aod->height};
+			}
+
+			skip_partial_update = false;
+		}
+	}
+
 	if (skip_partial_update) {
 		l_roi = (struct mdss_rect){0, 0,
 				ctl->mixer_left->width,
@@ -6108,7 +6136,7 @@ static int mdss_mdp_overlay_off(struct msm_fb_data_type *mfd)
 		 * retire_signal api checks for retire_cnt with sync_mutex lock.
 		 */
 
-		flush_work(&mdp5_data->retire_work);
+		flush_kthread_work(&mdp5_data->vsync_work);
 	}
 
 ctl_stop:
@@ -6313,13 +6341,13 @@ static void __vsync_retire_handle_vsync(struct mdss_mdp_ctl *ctl, ktime_t t)
 	}
 
 	mdp5_data = mfd_to_mdp5_data(mfd);
-	schedule_work(&mdp5_data->retire_work);
+	queue_kthread_work(&mdp5_data->worker, &mdp5_data->vsync_work);
 }
 
-static void __vsync_retire_work_handler(struct work_struct *work)
+static void __vsync_retire_work_handler(struct kthread_work *work)
 {
 	struct mdss_overlay_private *mdp5_data =
-		container_of(work, typeof(*mdp5_data), retire_work);
+		container_of(work, typeof(*mdp5_data), vsync_work);
 
 	if (!mdp5_data->ctl || !mdp5_data->ctl->mfd)
 		return;
@@ -6410,6 +6438,7 @@ static int __vsync_retire_setup(struct msm_fb_data_type *mfd)
 {
 	struct mdss_overlay_private *mdp5_data = mfd_to_mdp5_data(mfd);
 	char name[24];
+	struct sched_param param = { .sched_priority = 5 };
 
 	snprintf(name, sizeof(name), "mdss_fb%d_retire", mfd->index);
 	mdp5_data->vsync_timeline = sw_sync_timeline_create(name);
@@ -6417,12 +6446,26 @@ static int __vsync_retire_setup(struct msm_fb_data_type *mfd)
 		pr_err("cannot vsync create time line");
 		return -ENOMEM;
 	}
+
+	init_kthread_worker(&mdp5_data->worker);
+	init_kthread_work(&mdp5_data->vsync_work, __vsync_retire_work_handler);
+
+	mdp5_data->thread = kthread_run(kthread_worker_fn,
+					&mdp5_data->worker, "vsync_retire_work");
+
+	if (IS_ERR(mdp5_data->thread)) {
+		pr_err("unable to start vsync thread\n");
+		mdp5_data->thread = NULL;
+		return -ENOMEM;
+	}
+
+	sched_setscheduler(mdp5_data->thread, SCHED_FIFO, &param);
+
 	mfd->mdp_sync_pt_data.get_retire_fence = __vsync_retire_get_fence;
 
 	mdp5_data->vsync_retire_handler.vsync_handler =
 		__vsync_retire_handle_vsync;
 	mdp5_data->vsync_retire_handler.cmd_post_flush = false;
-	INIT_WORK(&mdp5_data->retire_work, __vsync_retire_work_handler);
 
 	return 0;
 }
@@ -6758,7 +6801,7 @@ static int mdss_mdp_scaler_lut_init(struct mdss_data_type *mdata,
 		struct mdp_scale_luts_info *lut_tbl)
 {
 	struct mdss_mdp_qseed3_lut_tbl *qseed3_lut_tbl;
-	int ret;
+	int ret = 0;
 
 	if (!mdata->scaler_off)
 		return -EFAULT;

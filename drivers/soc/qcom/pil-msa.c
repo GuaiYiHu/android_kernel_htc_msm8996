@@ -534,7 +534,7 @@ int pil_mss_reset_load_mba(struct pil_desc *pil)
 	char *fw_name_p;
 	void *mba_dp_virt;
 	dma_addr_t mba_dp_phys, mba_dp_phys_end;
-	int ret, count;
+	int ret;
 	const u8 *data;
 	struct device *dma_dev = md->mba_mem_dev_fixed ?: &md->mba_mem_dev;
 
@@ -595,16 +595,16 @@ int pil_mss_reset_load_mba(struct pil_desc *pil)
 			&mba_dp_phys, &mba_dp_phys_end, drv->mba_dp_size);
 
 	/* Load the MBA image into memory */
-	count = fw->size;
-	if (count <= SZ_1M) {
+	if (fw->size <= SZ_1M) {
 		/* Ensures memcpy is done for max 1MB fw size */
-		memcpy(mba_dp_virt, data, count);
+		memcpy(mba_dp_virt, data, fw->size);
 	} else {
 		dev_err(pil->dev, "%s fw image loading into memory is failed due to fw size overflow\n",
 			__func__);
 		 ret = -EINVAL;
 		 goto err_mba_data;
 	}
+
 	/* Ensure memcpy of the MBA memory is done before loading the DP */
 	wmb();
 
@@ -682,11 +682,11 @@ static int pil_msa_auth_modem_mdt(struct pil_desc *pil, const u8 *metadata,
 
 	if (pil->subsys_vmid > 0) {
 		/**
-		  * In case of modem ssr, we need to assign memory back to linux.
-		  * This is not true after cold boot since linux already owns
-		  * it. Also for secure boot devices, modem memory has to be
-		  * released after MBA is booted
-		  */
+		 * In case of modem ssr, we need to assign memory back to linux.
+		 * This is not true after cold boot since linux already owns
+		 * it. Also for secure boot devices, modem memory has to be
+		 * released after MBA is booted
+		 */
 		if (pil->modem_ssr) {
 			ret = pil_assign_mem_to_linux(pil, phy_addr, phy_sz);
 			if (ret)
@@ -756,7 +756,7 @@ static int pil_msa_mss_reset_mba_load_auth_mdt(struct pil_desc *pil,
 		return ret;
 
 	return pil_msa_auth_modem_mdt(pil, metadata, size,
-			modem_reg, sz_modem_reg);
+			 modem_reg, sz_modem_reg);
 }
 
 static int pil_msa_mba_verify_blob(struct pil_desc *pil, phys_addr_t phy_addr,

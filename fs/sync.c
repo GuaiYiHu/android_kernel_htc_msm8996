@@ -16,9 +16,21 @@
 #include <linux/quotaops.h>
 #include <linux/backing-dev.h>
 #include "internal.h"
+#include <trace/events/mmcio.h>
 
 #define VALID_FLAGS (SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE| \
 			SYNC_FILE_RANGE_WAIT_AFTER)
+
+static int bypass(char *path)
+{
+	int l = strlen(path);
+	if (l < 3)
+		return 0;
+	if (path[l-1] == BYPASS_RULE1 && path[l-2] == BYPASS_RULE2 && path[l-3] == BYPASS_RULE3)
+		return 1;
+	else
+		return 0;
+}
 
 /*
  * Do the filesystem syncing work. For simple filesystems
@@ -103,6 +115,8 @@ SYSCALL_DEFINE0(sync)
 {
 	int nowait = 0, wait = 1;
 
+	trace_sys_sync(0);
+
 	wakeup_flusher_threads(0, WB_REASON_SYNC);
 	iterate_supers(sync_inodes_one_sb, NULL);
 	iterate_supers(sync_fs_one_sb, &nowait);
@@ -111,6 +125,9 @@ SYSCALL_DEFINE0(sync)
 	iterate_bdevs(fdatawait_one_bdev, NULL);
 	if (unlikely(laptop_mode))
 		laptop_sync_completion();
+
+	trace_sys_sync_done(0);
+
 	return 0;
 }
 
@@ -164,6 +181,16 @@ SYSCALL_DEFINE1(syncfs, int, fd)
 	return ret;
 }
 
+extern int cancel_fsync;
+/* return 1: can async fsync, 0: otherwise */
+static int async_fsync(struct file *file)
+{
+	struct inode *inode = file->f_mapping->host;
+	struct super_block *sb = inode->i_sb;
+
+	return (sb->fsync_flags & FLAG_ASYNC_FSYNC) && cancel_fsync;
+}
+
 /**
  * vfs_fsync_range - helper to sync a range of data & metadata to disk
  * @file:		file to sync
@@ -177,9 +204,33 @@ SYSCALL_DEFINE1(syncfs, int, fd)
  */
 int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 {
+	int err;
+	ktime_t fsync_t, fsync_diff;
+	char pathname[256], *path;
+
 	if (!file->f_op->fsync)
 		return -EINVAL;
-	return file->f_op->fsync(file, start, end, datasync);
+
+	path = d_path(&(file->f_path), pathname, sizeof(pathname));
+	if (IS_ERR(path))
+		path = "(unknown)";
+	fsync_t = ktime_get();
+
+	if (async_fsync(file) && !bypass(path))
+		return 0;
+
+	trace_vfs_fsync(file);
+	err = file->f_op->fsync(file, start, end, datasync);
+	trace_vfs_fsync_done(file);
+
+	fsync_diff = ktime_sub(ktime_get(), fsync_t);
+	if (ktime_to_ms(fsync_diff) >= 5000) {
+		pr_info("VFS: %s pid:%d(%s)(parent:%d/%s) takes %lld ms to fsync %s\n", __func__,
+			current->pid, current->comm, current->parent->pid, current->parent->comm,
+			ktime_to_ms(fsync_diff), path);
+	}
+
+	return err;
 }
 EXPORT_SYMBOL(vfs_fsync_range);
 

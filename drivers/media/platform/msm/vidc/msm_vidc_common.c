@@ -131,10 +131,15 @@ static struct v4l2_ctrl **get_super_cluster(struct msm_vidc_inst *inst,
 				int num_ctrls)
 {
 	int c = 0;
-	struct v4l2_ctrl **cluster = kmalloc(sizeof(struct v4l2_ctrl *) *
+	struct v4l2_ctrl **cluster = NULL;
+
+	if(!inst)
+		return NULL;
+
+	cluster = kmalloc(sizeof(struct v4l2_ctrl *) *
 			num_ctrls, GFP_KERNEL);
 
-	if (!cluster || !inst)
+	if (!cluster)
 		return NULL;
 
 	for (c = 0; c < num_ctrls; c++)
@@ -1098,8 +1103,7 @@ static void handle_event_change(enum hal_command_response cmd, void *data)
 		rc = msm_comm_g_ctrl_for_id(inst,
 			V4L2_CID_MPEG_VIDC_VIDEO_CONTINUE_DATA_TRANSFER);
 
-		if ((!IS_ERR_VALUE(rc) && rc == true) ||
-				is_thumbnail_session(inst)) {
+		if (!IS_ERR_VALUE(rc) && rc == true) {
 			event = V4L2_EVENT_SEQ_CHANGED_SUFFICIENT;
 
 			if (msm_comm_get_stream_output_mode(inst) ==

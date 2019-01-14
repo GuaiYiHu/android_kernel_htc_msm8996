@@ -782,7 +782,7 @@ void mdss_mdp_irq_clear(struct mdss_data_type *mdata,
 
 int mdss_mdp_irq_enable(u32 intr_type, u32 intf_num)
 {
-	int irq_idx, idx;
+	int irq_idx;
 	unsigned long irq_flags;
 	int ret = 0;
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
@@ -801,7 +801,7 @@ int mdss_mdp_irq_enable(u32 intr_type, u32 intf_num)
 	spin_lock_irqsave(&mdp_lock, irq_flags);
 	if (mdata->mdp_irq_mask[irq.reg_idx] & irq.irq_mask) {
 		pr_warn("MDSS MDP IRQ-0x%x is already set, mask=%x\n",
-				irq.irq_mask, mdata->mdp_irq_mask[idx]);
+				irq.irq_mask, mdata->mdp_irq_mask[irq.reg_idx]);
 		ret = -EBUSY;
 	} else {
 		pr_debug("MDP IRQ mask old=%x new=%x\n",
@@ -2382,6 +2382,14 @@ ssize_t mdss_mdp_show_capabilities(struct device *dev,
 	if (mdata->clk_factor.numer)
 		SPRINT("clk_fudge_factor=%u,%u\n", mdata->clk_factor.numer,
 			mdata->clk_factor.denom);
+	if (mdata->has_rot_dwnscale) {
+		if (mdata->rot_dwnscale_min)
+			SPRINT("rot_dwnscale_min=%u\n",
+				mdata->rot_dwnscale_min);
+		if (mdata->rot_dwnscale_max)
+			SPRINT("rot_dwnscale_max=%u\n",
+				mdata->rot_dwnscale_max);
+	}
 	SPRINT("features=");
 	if (mdata->has_bwc)
 		SPRINT(" bwc");
@@ -3210,21 +3218,21 @@ static int mdss_mdp_parse_dt_pipe(struct platform_device *pdev)
 			&mdata->rgb_pipes, mdata->nrgb_pipes,
 			mdata->nvig_pipes);
 	if (IS_ERR_VALUE(rc))
-		goto parse_fail;
+		goto rgb_alloc_fail;
 	mdata->nrgb_pipes = rc;
 
 	rc = mdss_mdp_parse_dt_pipe_helper(pdev, MDSS_MDP_PIPE_TYPE_DMA, "dma",
 			&mdata->dma_pipes, mdata->ndma_pipes,
 			mdata->nvig_pipes + mdata->nrgb_pipes);
 	if (IS_ERR_VALUE(rc))
-		goto parse_fail;
+		goto dma_alloc_fail;
 	mdata->ndma_pipes = rc;
 
 	rc = mdss_mdp_parse_dt_pipe_helper(pdev, MDSS_MDP_PIPE_TYPE_CURSOR,
 			"cursor", &mdata->cursor_pipes, mdata->ncursor_pipes,
 			0);
 	if (IS_ERR_VALUE(rc))
-		goto parse_fail;
+		goto cursor_alloc_fail;
 	mdata->ncursor_pipes = rc;
 
 	rc = 0;
@@ -3277,6 +3285,14 @@ static int mdss_mdp_parse_dt_pipe(struct platform_device *pdev)
 			data[0], data[1], data[2], data[3]);
 	}
 
+	return rc;
+
+cursor_alloc_fail:
+	devm_kfree(&pdev->dev, mdata->dma_pipes);
+dma_alloc_fail:
+	devm_kfree(&pdev->dev, mdata->rgb_pipes);
+rgb_alloc_fail:
+	devm_kfree(&pdev->dev, mdata->vig_pipes);
 parse_fail:
 	return rc;
 }
@@ -4146,6 +4162,19 @@ static int mdss_mdp_parse_dt_misc(struct platform_device *pdev)
 		 "qcom,mdss-traffic-shaper-enabled");
 	mdata->has_rot_dwnscale = of_property_read_bool(pdev->dev.of_node,
 		"qcom,mdss-has-rotator-downscale");
+	if (mdata->has_rot_dwnscale) {
+		rc = of_property_read_u32(pdev->dev.of_node,
+			"qcom,mdss-rot-downscale-min",
+			&mdata->rot_dwnscale_min);
+		if (rc)
+			pr_err("Min rotator downscale property not specified\n");
+
+		rc = of_property_read_u32(pdev->dev.of_node,
+			"qcom,mdss-rot-downscale-max",
+			&mdata->rot_dwnscale_max);
+		if (rc)
+			pr_err("Max rotator downscale property not specified\n");
+	}
 
 	rc = of_property_read_u32(pdev->dev.of_node,
 		"qcom,mdss-dram-channels", &mdata->bus_channels);

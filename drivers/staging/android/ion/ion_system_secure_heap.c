@@ -133,7 +133,7 @@ static void ion_system_secure_heap_prefetch_work(struct work_struct *work)
 	unsigned long flags, size;
 	struct ion_buffer *buffer;
 	int ret;
-	int vmid_flags;
+	unsigned long vmid_flags;
 
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
@@ -156,7 +156,7 @@ static void ion_system_secure_heap_prefetch_work(struct work_struct *work)
 						PAGE_SIZE, 0);
 		if (ret) {
 			pr_debug("%s: Failed to get %zx allocation for %s, ret = %d\n",
-				__func__, info->size, secure_heap->heap.name,
+				__func__, size, secure_heap->heap.name,
 				ret);
 			spin_lock_irqsave(&secure_heap->work_lock, flags);
 			continue;

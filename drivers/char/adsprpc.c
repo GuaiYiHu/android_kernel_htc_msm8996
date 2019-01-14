@@ -61,6 +61,7 @@
 #define VMID_ADSP_Q6    6
 
 #define RPC_TIMEOUT	(5 * HZ)
+#define OPEN_TIMEOUT    (0.5 * HZ)
 #define BALIGN		128
 #define NUM_CHANNELS	3		/*1 compute 1 cpz 1 mdsp*/
 #define NUM_SESSIONS	8		/*8 compute*/
@@ -2010,9 +2011,9 @@ static int fastrpc_device_open(struct inode *inode, struct file *filp)
 
 	if (me->pending_free) {
 		event = wait_event_interruptible_timeout(wait_queue,
-						!me->pending_free, RPC_TIMEOUT);
+				!me->pending_free, OPEN_TIMEOUT);
 		if (event == 0)
-			pr_err("timed out..list is still not empty\n");
+			pr_err("fastrpc:timed out..list is still not empty\n");
 	}
 
 	VERIFY(err, fl = kzalloc(sizeof(*fl), GFP_KERNEL));
@@ -2447,6 +2448,15 @@ static int fastrpc_probe(struct platform_device *pdev)
 		}
 		if (range.addr) {
 			int srcVM[1] = {VMID_HLOS};
+#if 1 /* Modem_BSP HTC WA for 8996 modem MPU limitation */
+			int destVM[3] = {VMID_HLOS, VMID_SSC_Q6, VMID_ADSP_Q6};
+			int destVMperm[3] = {PERM_READ | PERM_WRITE | PERM_EXEC,
+					PERM_READ | PERM_WRITE | PERM_EXEC,
+					PERM_READ | PERM_WRITE | PERM_EXEC,
+					};
+			VERIFY(err, !hyp_assign_phys(range.addr, range.size,
+					srcVM, 1, destVM, destVMperm, 3));
+#else
 			int destVM[4] = {VMID_HLOS, VMID_MSS_MSA, VMID_SSC_Q6,
 					VMID_ADSP_Q6};
 			int destVMperm[4] = {PERM_READ | PERM_WRITE | PERM_EXEC,
@@ -2456,6 +2466,7 @@ static int fastrpc_probe(struct platform_device *pdev)
 					};
 			VERIFY(err, !hyp_assign_phys(range.addr, range.size,
 					srcVM, 1, destVM, destVMperm, 4));
+#endif /* Modem_BSP */
 			if (err)
 				goto bail;
 		}

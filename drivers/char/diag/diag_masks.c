@@ -27,6 +27,9 @@
 
 #define DIAG_SET_FEATURE_MASK(x) (feature_bytes[(x)/8] |= (1 << (x & 0x7)))
 
+/*++ 2015/10/26, USB Team, PCN00033 ++*/
+extern int diag_rb_enable;
+/*-- 2015/10/26, USB Team, PCN00033 --*/
 #define diag_check_update(x)	\
 	(!info || (info && (info->peripheral_mask & MD_PERIPHERAL_MASK(x)))) \
 
@@ -101,7 +104,7 @@ static void diag_send_log_mask_update(uint8_t peripheral, int equip_id)
 
 	if (!driver->diagfwd_cntl[peripheral] ||
 	    !driver->diagfwd_cntl[peripheral]->ch_open) {
-		pr_debug("diag: In %s, control channel is not open, p: %d\n",
+		DIAG_DBUG("diag: In %s, control channel is not open, p: %d\n",
 			 __func__, peripheral);
 		return;
 	}
@@ -135,7 +138,7 @@ static void diag_send_log_mask_update(uint8_t peripheral, int equip_id)
 		send_once = 0;
 		break;
 	default:
-		pr_debug("diag: In %s, invalid log_mask status\n", __func__);
+		DIAG_DBUG("diag: In %s, invalid log_mask status\n", __func__);
 		return;
 	}
 
@@ -203,7 +206,7 @@ static void diag_send_event_mask_update(uint8_t peripheral)
 	int temp_len = 0;
 
 	if (num_bytes <= 0 || num_bytes > driver->event_mask_size) {
-		pr_debug("diag: In %s, invalid event mask length %d\n",
+		DIAG_DBUG("diag: In %s, invalid event mask length %d\n",
 			 __func__, num_bytes);
 		return;
 	}
@@ -213,7 +216,7 @@ static void diag_send_event_mask_update(uint8_t peripheral)
 
 	if (!driver->diagfwd_cntl[peripheral] ||
 	    !driver->diagfwd_cntl[peripheral]->ch_open) {
-		pr_debug("diag: In %s, control channel is not open, p: %d\n",
+		DIAG_DBUG("diag: In %s, control channel is not open, p: %d\n",
 			 __func__, peripheral);
 		return;
 	}
@@ -260,7 +263,7 @@ static void diag_send_event_mask_update(uint8_t peripheral)
 		write_len += num_bytes;
 		break;
 	default:
-		pr_debug("diag: In %s, invalid status %d\n", __func__,
+		DIAG_DBUG("diag: In %s, invalid status %d\n", __func__,
 			 mask_info->status);
 		goto err;
 	}
@@ -295,7 +298,7 @@ static void diag_send_msg_mask_update(uint8_t peripheral, int first, int last)
 
 	if (!driver->diagfwd_cntl[peripheral] ||
 	    !driver->diagfwd_cntl[peripheral]->ch_open) {
-		pr_debug("diag: In %s, control channel is not open, p: %d\n",
+		DIAG_DBUG("diag: In %s, control channel is not open, p: %d\n",
 			 __func__, peripheral);
 		return;
 	}
@@ -329,7 +332,7 @@ static void diag_send_msg_mask_update(uint8_t peripheral, int first, int last)
 	case DIAG_CTRL_MASK_VALID:
 		break;
 	default:
-		pr_debug("diag: In %s, invalid status: %d\n", __func__,
+		DIAG_DBUG("diag: In %s, invalid status: %d\n", __func__,
 			 mask_info->status);
 		goto err;
 	}
@@ -359,7 +362,7 @@ static void diag_send_msg_mask_update(uint8_t peripheral, int first, int last)
 			} else {
 				mask_info->update_buf = temp;
 				mask_info->update_buf_len = temp_len;
-				pr_debug("diag: In %s, successfully reallocated msg_mask update buffer to len: %d\n",
+				DIAG_DBUG("diag: In %s, successfully reallocated msg_mask update buffer to len: %d\n",
 					 __func__, mask_info->update_buf_len);
 			}
 		} else if (mask_info->status == DIAG_CTRL_MASK_ALL_ENABLED) {
@@ -750,11 +753,21 @@ static int diag_cmd_set_msg_mask(unsigned char *src_buf, int src_len,
 		mask_size = dest_len - write_len;
 	memcpy(dest_buf + write_len, src_buf + header_len, mask_size);
 	write_len += mask_size;
+/*++ 2015/10/26, USB Team, PCN00033 ++*/
 	for (i = 0; i < NUM_PERIPHERALS; i++) {
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & DQ_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & WCNSS_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
 		if (!diag_check_update(i))
 			continue;
 		diag_send_msg_mask_update(i, req->ssid_first, req->ssid_last);
 	}
+/*-- 2015/10/26, USB Team, PCN00033 --*/
 end:
 	return write_len;
 }
@@ -812,12 +825,21 @@ static int diag_cmd_set_all_msg_mask(unsigned char *src_buf, int src_len,
 	memcpy(dest_buf, &rsp, header_len);
 	write_len += header_len;
 
+/*++ 2015/10/26, USB Team, PCN00033 ++*/
 	for (i = 0; i < NUM_PERIPHERALS; i++) {
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & DQ_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & WCNSS_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
 		if (!diag_check_update(i))
 			continue;
 		diag_send_msg_mask_update(i, ALL_SSID, ALL_SSID);
 	}
-
+/*-- 2015/10/26, USB Team, PCN00033 --*/
 	return write_len;
 }
 
@@ -906,12 +928,21 @@ static int diag_cmd_update_event_mask(unsigned char *src_buf, int src_len,
 	memcpy(dest_buf + write_len, mask_info->ptr, mask_len);
 	write_len += mask_len;
 
+/*++ 2015/10/26, USB Team, PCN00033 ++*/
 	for (i = 0; i < NUM_PERIPHERALS; i++) {
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & DQ_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & WCNSS_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
 		if (!diag_check_update(i))
 			continue;
 		diag_send_event_mask_update(i);
 	}
-
+/*-- 2015/10/26, USB Team, PCN00033 --*/
 	return write_len;
 }
 
@@ -953,11 +984,21 @@ static int diag_cmd_toggle_events(unsigned char *src_buf, int src_len,
 	 */
 	header.cmd_code = DIAG_CMD_EVENT_TOGGLE;
 	header.padding = 0;
+/*++ 2015/10/26, USB Team, PCN00033 ++*/
 	for (i = 0; i < NUM_PERIPHERALS; i++) {
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & DQ_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & WCNSS_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
 		if (!diag_check_update(i))
 			continue;
 		diag_send_event_mask_update(i);
 	}
+/*-- 2015/10/26, USB Team, PCN00033 --*/
 	memcpy(dest_buf, &header, sizeof(header));
 	write_len += sizeof(header);
 
@@ -1207,11 +1248,21 @@ static int diag_cmd_set_log_mask(unsigned char *src_buf, int src_len,
 	memcpy(dest_buf + write_len, src_buf + read_len, payload_len);
 	write_len += payload_len;
 
+/*++ 2015/10/26, USB Team, PCN00033 ++*/
 	for (i = 0; i < NUM_PERIPHERALS; i++) {
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & DQ_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & WCNSS_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
 		if (!diag_check_update(i))
 			continue;
 		diag_send_log_mask_update(i, req->equip_id);
 	}
+/*-- 2015/10/26, USB Team, PCN00033 --*/
 end:
 	return write_len;
 }
@@ -1258,12 +1309,21 @@ static int diag_cmd_disable_log_mask(unsigned char *src_buf, int src_len,
 	header.status = LOG_STATUS_SUCCESS;
 	memcpy(dest_buf, &header, sizeof(struct diag_log_config_rsp_t));
 	write_len += sizeof(struct diag_log_config_rsp_t);
+/*++ 2015/10/26, USB Team, PCN00033 ++*/
 	for (i = 0; i < NUM_PERIPHERALS; i++) {
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & DQ_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
+		if (i == PERIPHERAL_MODEM && (diag_rb_enable & WCNSS_FILTER_MASK)) {
+			printk("diag(%d): Filter Modem mask\n", __LINE__);
+			continue;
+		}
 		if (!diag_check_update(i))
 			continue;
 		diag_send_log_mask_update(i, ALL_EQUIP_ID);
 	}
-
+/*-- 2015/10/26, USB Team, PCN00033 --*/
 	return write_len;
 }
 
@@ -1821,6 +1881,9 @@ int diag_copy_to_user_msg_mask(char __user *buf, size_t count,
 	mask = (struct diag_msg_mask_t *)(mask_info->ptr);
 	for (i = 0; i < driver->msg_mask_tbl_count; i++, mask++) {
 		ptr = mask_info->update_buf;
+		if (!ptr)
+			pr_err("diag: In %s, mask_info->update_buf is null\n",
+					__func__);
 		len = 0;
 		mutex_lock(&mask->lock);
 		header.ssid_first = mask->ssid_first;
